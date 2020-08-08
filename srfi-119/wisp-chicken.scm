@@ -51,7 +51,8 @@
   (import chicken.base)
   (import chicken.format)
   (import chicken.port) ; port-name, and port-position
-  (import continuations) ; throw/catch
+  ; (import continuations) ; throw/catch
+  (import simple-exceptions) ; replacing
   (import scheme)
   (import srfi-1)
   (import srfi-69) ; hash tables
@@ -73,6 +74,9 @@
   ; https://www.gnu.org/software/guile/docs/docs-1.6/guile-ref/Block-Reading-and-Writing.html#Block%20Reading%20and%20Writing
 
 ;; Helper functions for the indent-and-symbols data structure: '((indent token token ...) ...)
+
+(define syntax-exn (make-exception "Syntax Error"))
+
 (define (line-indent line)
          (car line))
 
@@ -227,7 +231,8 @@
                  (cdr newlevels)
                  (+ 1 diff)))
              (else
-               (throw 'wisp-syntax-error "Level ~A not found in the indentation-levels ~A.")))))
+               (raise (syntax-exn (sprintf "Level ~A not found in the indentation-levels ~A." level indentation-levels)))
+               ))))
 
 (define (indent-level-difference indentation-levels level)
          "Find how many indentation levels need to be popped off to find the given level."
@@ -291,7 +296,7 @@
                  ; start too strict. FIXME: breaks on lines with only
                  ; underscores which should empty lines.
                  ((and inunderscoreindent (and (not (equal? #\space next-char)) (not (equal? #\newline next-char))))
-                   (throw 'wisp-syntax-error "initial underscores without following whitespace at beginning of the line after" (last indent-and-symbols)))
+                    (raise (syntax-exn (sprintf "initial underscores without following whitespace at beginning of the line after ~A." (last indent-and-symbols)))))
                  ((equal? #\newline next-char)
                    (read-char port ); remove the newline
                    ; The following two lines would break the REPL by requiring one char too many.
@@ -320,11 +325,15 @@
                             (+ 1 emptylines))))
                      (when (not (= 0 (length parsedline)))
                          ; set the source properties to parsedline so we can try to add them later.
-                         (set-source-property! parsedline 'filename (port-name port))
-                         (set-source-property! parsedline 'line
-                                               (car (port-position
-                                                      port))  ))
-                     ;                              ^^^ port-position returns row and column
+                         (set-source-property!
+                           parsedline
+                           'filename
+                           (port-name port))
+                         (let-values (((row col) (port-position port)))
+                            (set-source-property!
+                              parsedline
+                              'line
+                              row  )))
                      ; TODO: If the line is empty. Either do it here and do not add it, just
                      ; increment the empty line counter, or strip it later. Replace indent
                      ; -1 by indent 0 afterwards.
@@ -472,9 +481,8 @@
              (not (null? lines))
              (not (line-empty-code? (car lines)))
              (not (= 0 (line-real-indent (car lines ))))); -1 is a line with a comment
-           (throw 'wisp-syntax-error
-             (format #f "The first symbol in a chunk must start at zero indentation. Indentation and line: ~A"
-               (car lines))))
+           (raise (syntax-exn (sprintf "The first symbol in a chunk must start at zero indentation. Indentation and line: ~A" (car lines))))
+           )
          (let loop
            ((processed '())
              (unprocessed lines)
@@ -510,7 +518,9 @@
                  (values processed unprocessed))
                ((null? indentation-levels)
                  ; display "indentation-levels null\n"
-                 (throw 'wisp-programming-error "The indentation-levels are null but the current-line is null: Something killed the indentation-levels."))
+                 (raise (syntax-exn "The indentation-levels are null but the current-line is null: Something killed the indentation-levels."))
+
+                 )
                (else ; now we come to the line-comparisons and indentation-counting.
                    (cond
                      ((line-empty-code? current-line)
@@ -577,9 +587,9 @@
                            current-line-indentation
                            indentation-levels)))
                      (else
-                       (throw 'wisp-not-implemented
-                             (format #f "Need to implement further line comparison: current: ~A, next: ~A, processed: ~A."
-                               current-line next-line processed)))))))))
+                       (raise (syntax-exn (sprintf "Need to implement further line comparison: current: ~A, next: ~A, processed: ~A." current-line next-line processed )))
+
+                       )))))))
 
 
 (define (wisp-scheme-replace-inline-colons lines)
@@ -688,7 +698,7 @@ Match is awesome!"
                   (a
                     a))))
            (define (syntax-error li msg)
-                   (throw 'wisp-syntax-error (format #f "incorrect dot-syntax #{.}# in code: ~A: ~A" msg li)))
+                   (raise (syntax-exn (sprintf "incorrect dot-syntax #{.}# in code: ~A: ~A" msg li))))
            (if #t
             improper
             (let check
